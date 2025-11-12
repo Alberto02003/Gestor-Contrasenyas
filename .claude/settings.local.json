@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(npm run dev:*)",
+      "Bash(set PORT=3000:*)",
+      "Bash(npx vite:*)",
+      "Bash(npm install:*)",
+      "Bash(dir:*)",
+      "Bash(move:*)",
+      "Bash(move electronpreload.js electronpreload.cjs)",
+      "Bash(npm run build:electron:*)",
+      "Bash(node convert-icon.js:*)",
+      "Bash(node convert-icon.cjs:*)",
+      "Bash(node create-icon.cjs:*)",
+      "Bash(test:*)",
+      "Bash(findstr:*)",
+      "Bash(echo:*)",
+      "Bash(npm run build:*)",
+      "Bash(tee:*)",
+      "Bash(if not exist build mkdir build)",
+      "Bash(npx electron-builder:*)",
+      "Bash(git remote remove:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

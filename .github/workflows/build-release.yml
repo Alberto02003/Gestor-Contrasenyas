@@ -1,0 +1,89 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on version tags like v1.0.0
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            artifact_name: 'Gestor de Contraseñas-Setup-*.exe'
+            artifact_path: 'dist-electron/*.exe'
+          - os: macos-latest
+            platform: mac
+            artifact_name: 'Gestor de Contraseñas-*.dmg'
+            artifact_path: 'dist-electron/*.dmg'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create icon (Windows)
+        if: matrix.platform == 'win'
+        run: node convert-icon.cjs
+
+      - name: Create icon (macOS)
+        if: matrix.platform == 'mac'
+        run: node convert-icon-mac.js
+
+      - name: Build Electron app
+        run: npm run build:electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-installer
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: win-installer
+          path: ./artifacts/win
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-installer
+          path: ./artifacts/mac
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ./artifacts/win/*.exe
+            ./artifacts/win/*.exe.blockmap
+            ./artifacts/mac/*.dmg
+            ./artifacts/mac/*.dmg.blockmap
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

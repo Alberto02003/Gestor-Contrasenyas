@@ -1,0 +1,10 @@
+Por favor, coloca un icono icon.png (256x256 o 512x512) en esta carpeta public/.
+
+El icono debería representar Gestor de Contraseñas, un gestor de contraseñas.
+Puedes usar herramientas como:
+- https://www.canva.com (crear icono gratis)
+- https://icon-icons.com (descargar iconos)
+- O crear uno personalizado con un escudo + llave
+
+Formato recomendado: PNG con fondo transparente
+Dimensiones: 512x512 px
