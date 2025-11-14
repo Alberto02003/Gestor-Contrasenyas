@@ -17,6 +17,8 @@ export type UseNetworkShareResult = {
   error: string | null;
   isElectron: boolean;
   shareCredential: (peerId: string, credential: Credential) => Promise<void>;
+  latestShare: IncomingSharePayload | null;
+  clearLatestShare: () => void;
 };
 
 export function useNetworkShare(): UseNetworkShareResult {
@@ -25,6 +27,7 @@ export function useNetworkShare(): UseNetworkShareResult {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isElectron, setIsElectron] = useState(false);
+  const [latestShare, setLatestShare] = useState<IncomingSharePayload | null>(null);
 
   useEffect(() => {
     const api = getNetworkAPI();
@@ -61,9 +64,8 @@ export function useNetworkShare(): UseNetworkShareResult {
           const next = [share, ...prev];
           return next.slice(0, 5);
         });
-        toast.info(`Contrasena recibida de ${share.fromName}`, {
-          description: share.credentialTitle,
-        });
+        // Establecer como última contraseña recibida para mostrar en el diálogo
+        setLatestShare(share);
       });
       if (typeof cleanup === 'function') {
         removeShareListener = cleanup;
@@ -91,6 +93,10 @@ export function useNetworkShare(): UseNetworkShareResult {
     });
   }, []);
 
+  const clearLatestShare = useCallback(() => {
+    setLatestShare(null);
+  }, []);
+
   return {
     peers,
     incomingShares,
@@ -98,5 +104,7 @@ export function useNetworkShare(): UseNetworkShareResult {
     error,
     isElectron,
     shareCredential,
+    latestShare,
+    clearLatestShare,
   };
 }

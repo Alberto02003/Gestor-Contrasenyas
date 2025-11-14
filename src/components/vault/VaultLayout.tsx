@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useVaultStore } from '@/stores/vaultStore';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
@@ -10,6 +10,7 @@ import { SettingsSheet } from './SettingsSheet';
 import { Credential } from '@/types/vault';
 import { useNetworkShare } from '@/hooks/use-network-share';
 import { NetworkSharePanel } from './NetworkSharePanel';
+import { ReceivedPasswordDialog } from './ReceivedPasswordDialog';
 export function VaultLayout() {
   const lockVault = useVaultStore((s) => s.lockVault);
   const credentials = useVaultStore((s) => s.vault?.credentials) ?? [];
@@ -19,8 +20,16 @@ export function VaultLayout() {
   const [isNetworkSheetOpen, setNetworkSheetOpen] = useState(false);
   const [shareCredentialId, setShareCredentialId] = useState<string | null>(null);
   const [editingCredential, setEditingCredential] = useState<Credential | undefined>(undefined);
+  const [isPasswordDialogOpen, setPasswordDialogOpen] = useState(false);
   const selectedCredential = credentials.find(c => c.id === selectedId) ?? null;
   const networkShare = useNetworkShare();
+
+  // Abrir diálogo cuando llega una nueva contraseña
+  useEffect(() => {
+    if (networkShare.latestShare) {
+      setPasswordDialogOpen(true);
+    }
+  }, [networkShare.latestShare]);
 
   const handleAddNew = () => {
     setEditingCredential(undefined);
@@ -41,6 +50,13 @@ export function VaultLayout() {
   const openNetworkSheet = (credentialId?: string | null) => {
     setShareCredentialId(credentialId ?? selectedId ?? null);
     setNetworkSheetOpen(true);
+  };
+
+  const handlePasswordDialogClose = (open: boolean) => {
+    setPasswordDialogOpen(open);
+    if (!open) {
+      networkShare.clearLatestShare();
+    }
   };
 
   return (
@@ -168,6 +184,13 @@ export function VaultLayout() {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Diálogo de contraseña recibida */}
+      <ReceivedPasswordDialog
+        share={networkShare.latestShare}
+        open={isPasswordDialogOpen}
+        onOpenChange={handlePasswordDialogClose}
+      />
     </div>
   );
 }
