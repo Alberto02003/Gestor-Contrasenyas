@@ -2,20 +2,25 @@ import React, { useState } from 'react';
 import { useVaultStore } from '@/stores/vaultStore';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
-import { Lock, Plus, Settings, ShieldCheck } from 'lucide-react';
+import { Lock, Plus, Settings, ShieldCheck, Radio } from 'lucide-react';
 import { CredentialList } from './CredentialList';
 import { CredentialDetail } from './CredentialDetail';
 import { CredentialForm } from './CredentialForm';
 import { SettingsSheet } from './SettingsSheet';
 import { Credential } from '@/types/vault';
+import { useNetworkShare } from '@/hooks/use-network-share';
+import { NetworkSharePanel } from './NetworkSharePanel';
 export function VaultLayout() {
   const lockVault = useVaultStore((s) => s.lockVault);
   const credentials = useVaultStore((s) => s.vault?.credentials) ?? [];
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isFormSheetOpen, setFormSheetOpen] = useState(false);
   const [isDetailSheetOpen, setDetailSheetOpen] = useState(false);
+  const [isNetworkSheetOpen, setNetworkSheetOpen] = useState(false);
+  const [shareCredentialId, setShareCredentialId] = useState<string | null>(null);
   const [editingCredential, setEditingCredential] = useState<Credential | undefined>(undefined);
   const selectedCredential = credentials.find(c => c.id === selectedId) ?? null;
+  const networkShare = useNetworkShare();
 
   const handleAddNew = () => {
     setEditingCredential(undefined);
@@ -31,6 +36,11 @@ export function VaultLayout() {
   const handleSelect = (id: string) => {
     setSelectedId(id);
     setDetailSheetOpen(true);
+  };
+
+  const openNetworkSheet = (credentialId?: string | null) => {
+    setShareCredentialId(credentialId ?? selectedId ?? null);
+    setNetworkSheetOpen(true);
   };
 
   return (
@@ -65,6 +75,23 @@ export function VaultLayout() {
               </div>
             </SheetContent>
           </Sheet>
+          <div className="relative">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1"
+              aria-label="Usuarios conectados en red"
+              onClick={() => openNetworkSheet(selectedId)}
+            >
+              <Radio className="h-4 w-4" />
+              <span className="text-xs hidden sm:inline">Red</span>
+            </Button>
+            {networkShare.incomingShares.length > 0 && (
+              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-semibold text-white">
+                {Math.min(9, networkShare.incomingShares.length)}
+              </span>
+            )}
+          </div>
           <Button variant="outline" size="sm" onClick={lockVault} aria-label="Bloquear bóveda">
             <Lock className="h-4 w-4" />
           </Button>
@@ -98,7 +125,12 @@ export function VaultLayout() {
             </SheetDescription>
           </SheetHeader>
           <div className="py-2">
-            <CredentialDetail credential={selectedCredential} onEdit={handleEdit} onDeselect={() => setDetailSheetOpen(false)} />
+            <CredentialDetail
+              credential={selectedCredential}
+              onEdit={handleEdit}
+              onDeselect={() => setDetailSheetOpen(false)}
+              onShare={(credential) => openNetworkSheet(credential.id)}
+            />
           </div>
         </SheetContent>
       </Sheet>
@@ -114,6 +146,25 @@ export function VaultLayout() {
           </SheetHeader>
           <div className="py-4">
             <CredentialForm credential={editingCredential} onDone={() => setFormSheetOpen(false)} />
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Network Share Sheet */}
+      <Sheet open={isNetworkSheetOpen} onOpenChange={setNetworkSheetOpen}>
+        <SheetContent className="w-full overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle>Compartir por red</SheetTitle>
+            <SheetDescription>
+              Envia contrasenas cifradas a otros equipos conectados en tu misma red local.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="py-4">
+            <NetworkSharePanel
+              selectedCredentialId={shareCredentialId ?? selectedId ?? null}
+              onCredentialChange={(id) => setShareCredentialId(id)}
+              networkShare={networkShare}
+            />
           </div>
         </SheetContent>
       </Sheet>

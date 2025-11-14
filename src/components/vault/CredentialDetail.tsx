@@ -3,7 +3,7 @@ import { Credential } from '@/types/vault';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { Copy, Edit, Trash2, Eye, EyeOff, ExternalLink } from 'lucide-react';
+import { Copy, Edit, Trash2, Eye, EyeOff, ExternalLink, Share2 } from 'lucide-react';
 import { useVaultStore } from '@/stores/vaultStore';
 import {
   AlertDialog,
@@ -21,8 +21,9 @@ interface CredentialDetailProps {
   credential: Credential | null;
   onEdit: (credential: Credential) => void;
   onDeselect: () => void;
+  onShare: (credential: Credential) => void;
 }
-export function CredentialDetail({ credential, onEdit, onDeselect }: CredentialDetailProps) {
+export function CredentialDetail({ credential, onEdit, onDeselect, onShare }: CredentialDetailProps) {
   const [showPassword, setShowPassword] = useState(false);
   const deleteCredential = useVaultStore((s) => s.deleteCredential);
   const clipboardClearSeconds = useVaultStore((s) => s.vault?.settings.clipboardClearSeconds) ?? 30;
@@ -106,7 +107,17 @@ export function CredentialDetail({ credential, onEdit, onDeselect }: CredentialD
         )}
       </CardContent>
       <Separator />
-      <CardFooter className="p-4 flex justify-end space-x-2">
+      <CardFooter className="p-4 flex flex-wrap justify-end gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          className="gap-1"
+          onClick={() => credential && onShare(credential)}
+        >
+          <Share2 className="h-4 w-4" />
+          Compartir
+        </Button>
+        <Button variant="outline" size="icon" onClick={() => onEdit(credential)}><Edit className="h-4 w-4" /></Button>
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="destructive" size="icon"><Trash2 className="h-4 w-4" /></Button>
@@ -124,7 +135,6 @@ export function CredentialDetail({ credential, onEdit, onDeselect }: CredentialD
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-        <Button variant="outline" size="icon" onClick={() => onEdit(credential)}><Edit className="h-4 w-4" /></Button>
       </CardFooter>
     </Card>
   );
