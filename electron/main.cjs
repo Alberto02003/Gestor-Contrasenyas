@@ -17,10 +17,10 @@ const WINDOW_WIDTH = 400;
 const WINDOW_HEIGHT = 600;
 const NETWORK_PORT = 45832;
 const NETWORK_GROUP = '230.189.10.10';
-const PRESENCE_INTERVAL_MS = 5000;
-const PEER_TTL_MS = 16000;
-const NETWORK_SCAN_INTERVAL_MS = 10000; // Escanear cada 10 segundos
-const PING_TIMEOUT_MS = 1000; // Timeout para cada IP
+const PRESENCE_INTERVAL_MS = 3000; // Anunciar cada 3 segundos
+const PEER_TTL_MS = 10000; // TTL de 10 segundos
+const NETWORK_SCAN_INTERVAL_MS = 2000; // Escanear cada 2 segundos para detección en tiempo real
+const PING_TIMEOUT_MS = 500; // Timeout rápido de 500ms para respuesta inmediata
 const peerMap = new Map();
 const selfId = randomUUID();
 
@@ -190,28 +190,61 @@ function checkIPReachable(ip) {
     const socket = new net.Socket();
     const timeout = setTimeout(() => {
       socket.destroy();
-      resolve({ ip, reachable: false });
+      resolve({ ip, reachable: false, hasAppPort: false });
     }, PING_TIMEOUT_MS);
 
     socket.setTimeout(PING_TIMEOUT_MS);
 
-    // Intentar conectar al puerto común 445 (SMB) o 135 (RPC) en Windows
-    socket.connect(445, ip, () => {
+    // Primero intentar conectar al puerto de la app (45832)
+    socket.connect(NETWORK_PORT, ip, () => {
       clearTimeout(timeout);
       socket.destroy();
-      resolve({ ip, reachable: true });
+      // Si se conecta al puerto de la app, definitivamente es alcanzable y tiene la app
+      resolve({ ip, reachable: true, hasAppPort: true });
     });
 
-    socket.on('error', () => {
+    socket.on('error', (err) => {
       clearTimeout(timeout);
       socket.destroy();
-      resolve({ ip, reachable: false });
+      // Si falla la conexión al puerto de la app, intentar puerto común (445 SMB)
+      checkCommonPort(ip).then(reachable => {
+        resolve({ ip, reachable, hasAppPort: false });
+      });
     });
 
     socket.on('timeout', () => {
       clearTimeout(timeout);
       socket.destroy();
-      resolve({ ip, reachable: false });
+      resolve({ ip, reachable: false, hasAppPort: false });
+    });
+  });
+}
+
+function checkCommonPort(ip) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      resolve(false);
+    }, 300); // 300ms timeout para puerto común
+
+    socket.setTimeout(300);
+    socket.connect(445, ip, () => {
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve(true);
+    });
+
+    socket.on('error', () => {
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve(false);
+    });
+
+    socket.on('timeout', () => {
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve(false);
     });
   });
 }
@@ -220,8 +253,8 @@ async function scanNetwork() {
   const ips = getNetworkRange();
   console.log(`[network] Escaneando ${ips.length} direcciones IP...`);
 
-  // Escanear en lotes de 20 IPs a la vez para no saturar
-  const batchSize = 20;
+  // Escanear en lotes de 50 IPs a la vez para máxima velocidad
+  const batchSize = 50;
   const results = [];
 
   for (let i = 0; i < ips.length; i += batchSize) {
@@ -244,12 +277,20 @@ async function scanNetwork() {
           name: `Equipo ${result.ip}`,
           ip: result.ip,
           lastSeen: now,
-          hasApp: false, // Marcar que no tiene la app
+          hasApp: result.hasAppPort, // Si tiene el puerto abierto, probablemente tiene la app
         });
         updated = true;
+        if (result.hasAppPort) {
+          console.log(`[network] ¡Puerto de app detectado en ${result.ip}!`);
+        }
       } else if (!existingPeer.hasApp) {
-        // Actualizar lastSeen para IPs detectadas por escaneo
+        // Actualizar lastSeen y hasApp para IPs detectadas por escaneo
         existingPeer.lastSeen = now;
+        if (result.hasAppPort && !existingPeer.hasApp) {
+          existingPeer.hasApp = true;
+          updated = true;
+          console.log(`[network] ¡Puerto de app ahora detectado en ${result.ip}!`);
+        }
       }
     }
   }
@@ -278,14 +319,36 @@ function emitPeerUpdate() {
 
 function announcePresence() {
   if (!networkSocket) return;
+  const myIp = getLocalIPv4();
   const payload = JSON.stringify({
     type: 'presence',
     id: selfId,
     name: os.hostname(),
-    ip: getLocalIPv4(),
+    ip: myIp,
     timestamp: Date.now(),
   });
-  networkSocket.send(Buffer.from(payload), NETWORK_PORT, NETWORK_GROUP);
+  const buffer = Buffer.from(payload);
+
+  console.log(`[network] Anunciando presencia: ${os.hostname()} (${myIp}) ID: ${selfId.slice(-8)}`);
+
+  // Enviar por multicast (por si funciona)
+  networkSocket.send(buffer, NETWORK_PORT, NETWORK_GROUP, (err) => {
+    if (err) {
+      console.error('[network] Error enviando anuncio multicast:', err);
+    }
+  });
+
+  // TAMBIÉN enviar directamente a todas las IPs detectadas (unicast)
+  // Esto asegura que las apps se detecten incluso si multicast está bloqueado
+  for (const [id, peer] of peerMap.entries()) {
+    if (peer.ip && peer.ip !== myIp && peer.ip !== '0.0.0.0') {
+      networkSocket.send(buffer, NETWORK_PORT, peer.ip, (err) => {
+        if (err && err.code !== 'EHOSTUNREACH') {
+          console.error(`[network] Error enviando anuncio unicast a ${peer.ip}:`, err.code);
+        }
+      });
+    }
+  }
 }
 
 function cleanupPeers() {
@@ -304,6 +367,7 @@ function cleanupPeers() {
 
 function handlePresencePacket(packet) {
   if (!packet?.id || packet.id === selfId) return;
+  console.log(`[network] Presencia recibida de: ${packet.name} (${packet.ip}) ID: ${packet.id.slice(-8)}`);
   const existing = peerMap.get(packet.id);
   const updatedPeer = {
     id: packet.id,
@@ -314,6 +378,7 @@ function handlePresencePacket(packet) {
   };
   peerMap.set(packet.id, { ...updatedPeer });
   if (!existing || existing.ip !== updatedPeer.ip || existing.hasApp !== updatedPeer.hasApp) {
+    console.log(`[network] Peer actualizado/agregado: ${updatedPeer.name} (${updatedPeer.ip})`);
     emitPeerUpdate();
   }
 }
@@ -366,6 +431,7 @@ function startNetworkBridge() {
   networkSocket.on('message', (msg, rinfo) => {
     try {
       const packet = JSON.parse(msg.toString());
+      console.log(`[network] Paquete recibido de ${rinfo?.address}:${rinfo?.port} tipo: ${packet.type}`);
       if (packet.type === 'presence') {
         handlePresencePacket(packet);
       } else if (packet.type === 'share') {
