@@ -1,5 +1,15 @@
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+
+export const CredentialHistoryEntrySchema = z.object({
+  id: z.string().uuid().default(() => uuidv4()),
+  type: z.enum(['view', 'share']),
+  timestamp: z.string().datetime().default(() => new Date().toISOString()),
+  context: z.string().optional(),
+});
+
+export type CredentialHistoryEntry = z.infer<typeof CredentialHistoryEntrySchema>;
+
 export const CredentialSchema = z.object({
   id: z.string().uuid().default(() => uuidv4()),
   title: z.string().min(1, 'Title is required'),
@@ -11,6 +21,9 @@ export const CredentialSchema = z.object({
   createdAt: z.string().datetime().default(() => new Date().toISOString()),
   updatedAt: z.string().datetime().default(() => new Date().toISOString()),
   lastUsedAt: z.string().datetime().optional(),
+  lastViewedAt: z.string().datetime().optional(),
+  lastSharedAt: z.string().datetime().optional(),
+  history: z.array(CredentialHistoryEntrySchema).optional(),
 });
 export type Credential = z.infer<typeof CredentialSchema>;
 export type NewCredential = z.input<typeof CredentialSchema>;

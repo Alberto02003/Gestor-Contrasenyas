@@ -2,8 +2,10 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, nativeTheme, Notif
 const path = require('path');
 const os = require('os');
 const dgram = require('dgram');
-const { randomUUID } = require('crypto');
+const { randomUUID, createCipheriv, createDecipheriv, randomBytes, createHash } = require('crypto');
 const net = require('net');
+const http = require('http');
+const fs = require('fs');
 
 let mainWindow = null;
 let tray = null;
@@ -12,15 +14,19 @@ let networkSocket = null;
 let presenceInterval = null;
 let cleanupInterval = null;
 let networkScanInterval = null;
+let lastKnownPosition = null;
 
-const WINDOW_WIDTH = 400;
-const WINDOW_HEIGHT = 600;
+const WINDOW_WIDTH = 420;
+const WINDOW_HEIGHT = 640;
 const NETWORK_PORT = 45832;
+const API_PORT = 45833; // Puerto para API HTTP local (extensión)
 const NETWORK_GROUP = '230.189.10.10';
 const PRESENCE_INTERVAL_MS = 3000; // Anunciar cada 3 segundos
 const PEER_TTL_MS = 10000; // TTL de 10 segundos
 const NETWORK_SCAN_INTERVAL_MS = 2000; // Escanear cada 2 segundos para detección en tiempo real
 const PING_TIMEOUT_MS = 500; // Timeout rápido de 500ms para respuesta inmediata
+const NETWORK_SECRET = process.env.NETWORK_SECRET || 'gestor-network-share-secret';
+const SHARE_ALGORITHM = 'aes-256-gcm';
 const peerMap = new Map();
 const selfId = randomUUID();
 
@@ -31,52 +37,63 @@ const THEME_COLORS = {
 };
 
 function createWindow() {
+  if (mainWindow) return;
+
   mainWindow = new BrowserWindow({
     width: WINDOW_WIDTH,
     height: WINDOW_HEIGHT,
-    minWidth: 350,
-    minHeight: 500,
-    maxWidth: 500,
-    maxHeight: 800,
-    frame: true,
-    resizable: true,
-    autoHideMenuBar: true, // Hide menu bar on Windows/Linux
+    frame: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    roundedCorners: true,
+    autoHideMenuBar: true,
+    backgroundColor: '#ffffff',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
     },
-    icon: path.join(__dirname, '../public/icon.png'),
-    show: false,
-    backgroundColor: '#ffffff',
   });
 
-  // Remove menu completely
   Menu.setApplicationMenu(null);
 
-  // Load the app
   if (process.env.NODE_ENV === 'development') {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
   } else {
-    // In production, dist/client is copied to dist in the asar
     const indexPath = path.join(__dirname, '../dist/index.html');
     mainWindow.loadFile(indexPath);
-    // Open DevTools to debug
-    mainWindow.webContents.openDevTools();
   }
 
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
     emitPeerUpdate();
+    toggleWindow(true);
   });
 
-  // Prevent window from closing, minimize to tray instead
+  mainWindow.on('blur', () => {
+    if (mainWindow && mainWindow.isVisible() && !mainWindow.webContents.isDevToolsOpened()) {
+      lastKnownPosition = mainWindow.getBounds();
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
+      lastKnownPosition = mainWindow.getBounds();
       mainWindow.hide();
-      return false;
+    }
+  });
+
+  mainWindow.on('move', () => {
+    if (mainWindow && mainWindow.isVisible()) {
+      lastKnownPosition = mainWindow.getBounds();
     }
   });
 
@@ -86,10 +103,20 @@ function createWindow() {
 }
 
 function createTray() {
-  // Create a simple icon for the tray (you'll want to replace this with a proper icon)
-  const trayIcon = nativeImage.createFromDataURL(
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAAn0lEQVQ4jWNgGAWMDAwMDP+J8D8RGBgYmBgYGBgYiNX8nwg9DMQaQIoGRgYGBiZSNDMyMDBg08zIwMDARKwBMBfgMoCJWAPwGcBErAH4DGAi1gCYAWQ5gVgD/v8nTy8DAwMDA8N/MjH5Cv//Jwfw5QJiDP5PioP//yfG4P/EGvyfmLrIxFigmf+J1AsDRDv5/39GBgYGxv9kYAYGBkZGhqHvBACJ8i9t0c6kDAAAAABJRU5ErkJggg=='
-  );
+  const iconPath = process.platform === 'win32'
+    ? path.join(__dirname, '../build/icon.ico')
+    : path.join(__dirname, '../public/icon.png');
+  let trayIcon;
+  try {
+    trayIcon = nativeImage.createFromPath(iconPath);
+  } catch (error) {
+    console.warn('[tray] Failed to load icon, falling back to default base64 icon.', error);
+  }
+  if (!trayIcon || trayIcon.isEmpty()) {
+    trayIcon = nativeImage.createFromDataURL(
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAAn0lEQVQ4jWNgGAWMDAwMDP+J8D8RGBgYmBgYGBgYiNX8nwg9DMQaQIoGRgYGBiZSNDMyMDBg08zIwMDARKwBMBfgMoCJWAPwGcBErAH4DGAi1gCYAWQ5gVgD/v8nTy8DAwMDA8N/MjH5Cv//Jwfw5QJiDP5PioP//yfG4P/EGvyfmLrIxFigmf+J1AsDRDv5/39GBgYGxv9kYAYGBkZGhqHvBACJ8i9t0c6kDAAAAABJRU5ErkJggg=='
+    );
+  }
 
   tray = new Tray(trayIcon);
 
@@ -97,11 +124,7 @@ function createTray() {
     {
       label: 'Abrir Gestor de Contraseñas',
       click: () => {
-        if (mainWindow) {
-          mainWindow.show();
-        } else {
-          createWindow();
-        }
+        toggleWindow(true);
       },
     },
     { type: 'separator' },
@@ -117,18 +140,108 @@ function createTray() {
   tray.setToolTip('Gestor de Contraseñas');
   tray.setContextMenu(contextMenu);
 
-  // Show window on tray icon click
-  tray.on('click', () => {
-    if (mainWindow) {
-      if (mainWindow.isVisible()) {
-        mainWindow.hide();
-      } else {
-        mainWindow.show();
-      }
-    } else {
-      createWindow();
-    }
+  tray.on('click', () => toggleWindow(true));
+  tray.on('right-click', () => toggleWindow(true));
+}
+
+function getWindowPosition(forceAnchor = false) {
+  if (!mainWindow || !tray) {
+    return { x: 0, y: 0 };
+  }
+  if (lastKnownPosition && !forceAnchor) {
+    return { x: lastKnownPosition.x, y: lastKnownPosition.y };
+  }
+  const windowBounds = mainWindow.getBounds();
+  const trayBounds = tray.getBounds();
+  const { screen } = require('electron');
+  const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
+  const workArea = display.workArea;
+  const screenBounds = display.bounds;
+
+  console.log('[window] Display info:', {
+    workArea,
+    screenBounds,
+    trayBounds,
+    windowSize: { width: windowBounds.width, height: windowBounds.height }
   });
+
+  let x = Math.round(trayBounds.x + trayBounds.width / 2 - windowBounds.width / 2);
+  let y = Math.round(trayBounds.y - windowBounds.height - 10);
+
+  if (process.platform === 'win32') {
+    // Detectar posición de la barra de tareas
+    const taskbarHeight = screenBounds.height - workArea.height;
+    const taskbarAtBottom = workArea.y === screenBounds.y && workArea.height < screenBounds.height;
+    const taskbarAtTop = workArea.y > screenBounds.y;
+    const taskbarAtRight = workArea.x === screenBounds.x && workArea.width < screenBounds.width;
+    const taskbarAtLeft = workArea.x > screenBounds.x;
+
+    console.log('[window] Taskbar detection:', {
+      taskbarHeight,
+      taskbarAtBottom,
+      taskbarAtTop,
+      taskbarAtRight,
+      taskbarAtLeft
+    });
+
+    // Si la barra de tareas está en la parte inferior (caso más común)
+    if (taskbarAtBottom || (!taskbarAtTop && !taskbarAtRight && !taskbarAtLeft)) {
+      // Posicionar justo encima de la barra de tareas
+      y = workArea.y + workArea.height - windowBounds.height - 8;
+
+      // Detectar si está en el área de notificaciones (esquina derecha)
+      const isNearNotificationArea = trayBounds.x > (workArea.x + workArea.width - 200);
+      if (isNearNotificationArea) {
+        // Alinear a la esquina inferior derecha con menos margen
+        x = workArea.x + workArea.width - windowBounds.width - 2;
+      }
+    } else if (taskbarAtTop) {
+      // Barra de tareas arriba
+      y = workArea.y + 8;
+    } else if (taskbarAtRight) {
+      // Barra de tareas a la derecha
+      x = workArea.x + workArea.width - windowBounds.width - 8;
+      y = workArea.y + workArea.height - windowBounds.height - 8;
+    } else if (taskbarAtLeft) {
+      // Barra de tareas a la izquierda
+      x = workArea.x + 8;
+      y = workArea.y + workArea.height - windowBounds.height - 8;
+    }
+  }
+
+  // Asegurar que la ventana esté completamente dentro de los límites del área de trabajo
+  if (x + windowBounds.width > workArea.x + workArea.width) {
+    x = workArea.x + workArea.width - windowBounds.width - 2;
+  }
+  if (x < workArea.x) {
+    x = workArea.x + 2;
+  }
+  if (y < workArea.y) {
+    y = workArea.y + 2;
+  }
+  if (y + windowBounds.height > workArea.y + workArea.height) {
+    y = workArea.y + workArea.height - windowBounds.height - 2;
+  }
+
+  console.log('[window] Final position:', { x, y });
+  return { x, y };
+}
+
+function toggleWindow(forceAnchor = false) {
+  if (!mainWindow) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isVisible()) {
+    lastKnownPosition = mainWindow.getBounds();
+    mainWindow.hide();
+  } else {
+    const position = getWindowPosition(forceAnchor);
+    mainWindow.setPosition(position.x, position.y, false);
+    mainWindow.show();
+    mainWindow.focus();
+    lastKnownPosition = { x: position.x, y: position.y, width: WINDOW_WIDTH, height: WINDOW_HEIGHT };
+  }
 }
 
 function getLocalIPv4() {
@@ -142,6 +255,39 @@ function getLocalIPv4() {
     }
   }
   return '0.0.0.0';
+}
+
+function deriveSharedKey(peerIdA, peerIdB) {
+  const sharedSeed = [peerIdA, peerIdB].sort().join(':');
+  return createHash('sha256').update(`${NETWORK_SECRET}:${sharedSeed}`).digest();
+}
+
+function encryptSharePayload(targetPeerId, payload) {
+  const key = deriveSharedKey(selfId, targetPeerId);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(SHARE_ALGORITHM, key, iv);
+  const serialized = Buffer.from(JSON.stringify(payload), 'utf8');
+  const encrypted = Buffer.concat([cipher.update(serialized), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return {
+    iv: iv.toString('base64'),
+    authTag: authTag.toString('base64'),
+    data: encrypted.toString('base64'),
+  };
+}
+
+function decryptSharePayload(senderPeerId, encryptedPayload) {
+  if (!encryptedPayload?.iv || !encryptedPayload?.authTag || !encryptedPayload?.data) {
+    throw new Error('Encrypted payload incompleto');
+  }
+  const key = deriveSharedKey(selfId, senderPeerId);
+  const iv = Buffer.from(encryptedPayload.iv, 'base64');
+  const authTag = Buffer.from(encryptedPayload.authTag, 'base64');
+  const encryptedData = Buffer.from(encryptedPayload.data, 'base64');
+  const decipher = createDecipheriv(SHARE_ALGORITHM, key, iv);
+  decipher.setAuthTag(authTag);
+  const decrypted = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
+  return JSON.parse(decrypted.toString('utf8'));
 }
 
 function getNetworkInfo() {
@@ -268,30 +414,32 @@ async function scanNetwork() {
   let updated = false;
 
   for (const result of results) {
-    if (result.reachable) {
-      const existingPeer = peerMap.get(result.ip);
-      if (!existingPeer) {
-        // Nueva IP detectada
-        peerMap.set(result.ip, {
-          id: result.ip, // Usar IP como ID para equipos sin app
-          name: `Equipo ${result.ip}`,
-          ip: result.ip,
-          lastSeen: now,
-          hasApp: result.hasAppPort, // Si tiene el puerto abierto, probablemente tiene la app
-        });
-        updated = true;
-        if (result.hasAppPort) {
-          console.log(`[network] ¡Puerto de app detectado en ${result.ip}!`);
-        }
-      } else if (!existingPeer.hasApp) {
-        // Actualizar lastSeen y hasApp para IPs detectadas por escaneo
-        existingPeer.lastSeen = now;
-        if (result.hasAppPort && !existingPeer.hasApp) {
-          existingPeer.hasApp = true;
-          updated = true;
-          console.log(`[network] ¡Puerto de app ahora detectado en ${result.ip}!`);
-        }
+    if (!result.reachable) {
+      continue;
+    }
+    const existingPeer = peerMap.get(result.ip);
+    if (!existingPeer) {
+      // Nueva IP detectada
+      peerMap.set(result.ip, {
+        id: result.ip, // Usar IP como ID para equipos sin app
+        name: `Equipo ${result.ip}`,
+        ip: result.ip,
+        lastSeen: now,
+        hasApp: result.hasAppPort, // Si tiene el puerto abierto, probablemente tiene la app
+      });
+      updated = true;
+      if (result.hasAppPort) {
+        console.log(`[network] Puerto de app detectado en ${result.ip}!`);
       }
+      continue;
+    }
+
+    // Actualizar lastSeen para mantener visible el equipo mientras lo seguimos detectando
+    existingPeer.lastSeen = now;
+    if (result.hasAppPort && !existingPeer.hasApp) {
+      existingPeer.hasApp = true;
+      updated = true;
+      console.log(`[network] Puerto de app ahora detectado en ${result.ip}!`);
     }
   }
 
@@ -386,13 +534,34 @@ function handlePresencePacket(packet) {
 function handleSharePacket(packet, remoteAddress) {
   if (!packet || packet.targetId !== selfId) return;
   const shareId = packet.shareId || randomUUID();
+  let credentialData = {
+    title: 'Contrasena recibida',
+    username: '',
+    password: '',
+  };
+
+  if (packet.encryptedPayload) {
+    try {
+      credentialData = decryptSharePayload(packet.id, packet.encryptedPayload);
+    } catch (error) {
+      console.error('[network] No se pudo descifrar la contrasena compartida', error);
+      return;
+    }
+  } else if (packet.credential) {
+    credentialData = {
+      title: packet.credential.title || credentialData.title,
+      username: packet.credential.username || '',
+      password: packet.credential.password || '',
+    };
+  }
+
   const payload = {
     id: shareId,
     fromName: packet.fromName || 'Equipo desconocido',
     fromIp: packet.fromIp || remoteAddress,
-    credentialTitle: packet.credential?.title || 'Contrasena recibida',
-    username: packet.credential?.username || '',
-    password: packet.credential?.password || '',
+    credentialTitle: credentialData.title || 'Contrasena recibida',
+    username: credentialData.username || '',
+    password: credentialData.password || '',
     timestamp: packet.timestamp || Date.now(),
   };
   const notification = new Notification({
@@ -492,6 +661,17 @@ function shareWithPeer(peerId, credential) {
   if (!peer) {
     throw new Error('Equipo no disponible');
   }
+  let encryptedPayload;
+  try {
+    encryptedPayload = encryptSharePayload(peerId, {
+      title: credential.title,
+      username: credential.username,
+      password: credential.password,
+    });
+  } catch (error) {
+    console.error('[network] No se pudo cifrar la contrasena para compartirla', error);
+    throw new Error('No se pudo cifrar la contrasena antes de enviarla.');
+  }
   const payload = JSON.stringify({
     type: 'share',
     shareId: randomUUID(),
@@ -499,11 +679,8 @@ function shareWithPeer(peerId, credential) {
     targetId: peerId,
     fromName: os.hostname(),
     fromIp: getLocalIPv4(),
-    credential: {
-      title: credential.title,
-      username: credential.username,
-      password: credential.password,
-    },
+    encryptedPayload,
+    payloadVersion: 1,
     timestamp: Date.now(),
   });
   networkSocket.send(Buffer.from(payload), NETWORK_PORT, peer.ip, (err) => {
@@ -574,4 +751,142 @@ app.on('window-all-closed', (e) => {
 app.on('before-quit', () => {
   isQuitting = true;
   stopNetworkBridge();
+  stopAPIServer();
 });
+
+// ============================================================================
+// API HTTP Server para comunicación con la extensión del navegador
+// ============================================================================
+
+let apiServer = null;
+
+// IPC Handler para obtener credenciales directamente del renderer
+ipcMain.handle('get-vault-credentials', async () => {
+  console.log('[API] Solicitud de credenciales desde el renderer');
+  return { success: true };
+});
+
+function startAPIServer() {
+  if (apiServer) return;
+
+  apiServer = http.createServer(async (req, res) => {
+    // CORS headers para permitir solicitudes desde la extensión
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(200);
+      res.end();
+      return;
+    }
+
+    // GET /api/credentials - Obtener todas las credenciales
+    if (req.url === '/api/credentials' && req.method === 'GET') {
+      try {
+        let credentials = [];
+
+        // Obtener credenciales desde el renderer process (donde está el store)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          try {
+            // Ejecutar código en el renderer para obtener las credenciales
+            const result = await mainWindow.webContents.executeJavaScript(`
+              (async function() {
+                try {
+                  // Acceder al store de Zustand
+                  const storeData = window.__vaultStore?.getState?.();
+
+                  if (storeData && storeData.status === 'unlocked' && storeData.vault) {
+                    return storeData.vault.credentials || [];
+                  }
+
+                  return [];
+                } catch (e) {
+                  console.error('[API] Error accessing vault store:', e);
+                  return [];
+                }
+              })()
+            `);
+
+            if (result && Array.isArray(result)) {
+              credentials = result.map(c => ({
+                id: c.id,
+                title: c.title,
+                username: c.username,
+                password: c.password,
+                url: c.url
+              }));
+            }
+          } catch (error) {
+            console.warn('[API] No se pudieron obtener credenciales del renderer:', error.message);
+          }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          credentials,
+          timestamp: Date.now()
+        }));
+
+        console.log(`[API] Credenciales enviadas: ${credentials.length}`);
+      } catch (error) {
+        console.error('[API] Error obteniendo credenciales:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: false,
+          error: 'Error interno del servidor'
+        }));
+      }
+      return;
+    }
+
+    // GET /api/health - Health check
+    if (req.url === '/api/health' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        status: 'running',
+        version: app.getVersion(),
+        timestamp: Date.now()
+      }));
+      return;
+    }
+
+    // 404 Not Found
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: false,
+      error: 'Endpoint no encontrado'
+    }));
+  });
+
+  apiServer.listen(API_PORT, '127.0.0.1', () => {
+    console.log(`[API] Servidor HTTP iniciado en http://127.0.0.1:${API_PORT}`);
+  });
+
+  apiServer.on('error', (error) => {
+    console.error('[API] Error en servidor:', error);
+    if (error.code === 'EADDRINUSE') {
+      console.error(`[API] Puerto ${API_PORT} ya está en uso`);
+    }
+  });
+}
+
+function stopAPIServer() {
+  if (apiServer) {
+    apiServer.close(() => {
+      console.log('[API] Servidor HTTP detenido');
+    });
+    apiServer = null;
+  }
+}
+
+// Iniciar API server cuando la app esté lista
+app.whenReady().then(() => {
+  startAPIServer();
+});
+
+
+
+

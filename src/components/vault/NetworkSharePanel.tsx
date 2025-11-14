@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Send, Loader2, Wifi, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Send, Loader2, Wifi, CheckCircle2, AlertCircle, Save } from 'lucide-react';
 import { useVaultStore } from '@/stores/vaultStore';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -29,8 +29,11 @@ export function NetworkSharePanel({
   networkShare,
 }: NetworkSharePanelProps) {
   const credentials = useVaultStore((state) => state.vault?.credentials ?? []);
+  const addCredential = useVaultStore((state) => state.addCredential);
+  const recordCredentialShare = useVaultStore((state) => state.recordCredentialShare);
   const [currentCredentialId, setCurrentCredentialId] = useState(selectedCredentialId ?? '');
   const [sendingPeerId, setSendingPeerId] = useState<string | null>(null);
+  const [savingShareId, setSavingShareId] = useState<string | null>(null);
   const { peers, incomingShares, loading, error, isElectron, shareCredential } = networkShare;
 
   useEffect(() => {
@@ -54,8 +57,9 @@ export function NetworkSharePanel({
     }
     try {
       setSendingPeerId(peerId);
-      await shareCredential(peerId, selectedCredential);
       const peerName = peers.find((peer) => peer.id === peerId)?.name ?? 'el equipo';
+      await shareCredential(peerId, selectedCredential);
+      await recordCredentialShare(selectedCredential.id, `Compartida con ${peerName}`);
       toast.success(`Contrasena enviada a ${peerName}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo compartir la contrasena.';
@@ -76,6 +80,24 @@ export function NetworkSharePanel({
       toast.success(`${label} copiado.`);
     } catch {
       toast.error('No se pudo copiar al portapapeles.');
+    }
+  };
+
+  const handleSaveShare = async (share: (typeof incomingShares)[number]) => {
+    try {
+      setSavingShareId(share.id);
+      await addCredential({
+        title: share.credentialTitle,
+        username: share.username,
+        password: share.password,
+        notes: `Compartida por ${share.fromName} (${share.fromIp}) el ${new Date(share.timestamp).toLocaleString()}`,
+      });
+      toast.success('Contrasena agregada a tu boveda.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo guardar la contrasena.';
+      toast.error(message);
+    } finally {
+      setSavingShareId(null);
     }
   };
 
@@ -229,6 +251,24 @@ export function NetworkSharePanel({
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => handleCopy(share.password, 'Contrasena')}>
                     Copiar contrasena
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="gap-1"
+                    onClick={() => handleSaveShare(share)}
+                    disabled={savingShareId === share.id}
+                  >
+                    {savingShareId === share.id ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Guardando
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-4 w-4" />
+                        Guardar aqui
+                      </>
+                    )}
                   </Button>
                 </div>
               </div>

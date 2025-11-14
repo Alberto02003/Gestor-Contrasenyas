@@ -45,7 +45,7 @@ export function ErrorFallback({
         <div className="absolute inset-0 bg-gradient-rainbow opacity-5 dark:opacity-10" />
         
         {/* Error card */}
-        <Card className="relative backdrop-blur-sm shadow-2xl">
+        <Card className="relative shadow-2xl">
           <CardContent className="p-8 space-y-6">
             {/* Icon and title */}
             <div className="text-center space-y-4">

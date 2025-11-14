@@ -22,6 +22,8 @@ type VaultActions = {
   deleteCredential: (id: string) => Promise<void>;
   updateSettings: (settings: Partial<Settings>) => Promise<void>;
   updateActivity: () => void;
+  recordCredentialView: (id: string, context?: string) => Promise<void>;
+  recordCredentialShare: (id: string, context?: string) => Promise<void>;
   _persistVault: () => Promise<void>;
 };
 
@@ -92,6 +94,7 @@ export const useVaultStore = create<VaultState & VaultActions>()(
         id: uuidv4(),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
+        history: [],
       };
       set((state) => {
         state.vault?.credentials.push(newCredential);
@@ -132,8 +135,51 @@ export const useVaultStore = create<VaultState & VaultActions>()(
       });
       await get()._persistVault();
     },
+    recordCredentialView: async (id, context) => {
+      const { vault } = get();
+      if (!vault) return;
+      set((state) => {
+        const credential = state.vault?.credentials.find((c) => c.id === id);
+        if (!credential) return;
+        credential.lastViewedAt = new Date().toISOString();
+        credential.history = [
+          {
+            id: uuidv4(),
+            type: 'view',
+            timestamp: credential.lastViewedAt,
+            context,
+          },
+          ...(credential.history ?? []),
+        ].slice(0, 50);
+      });
+      await get()._persistVault();
+    },
+    recordCredentialShare: async (id, context) => {
+      const { vault } = get();
+      if (!vault) return;
+      set((state) => {
+        const credential = state.vault?.credentials.find((c) => c.id === id);
+        if (!credential) return;
+        credential.lastSharedAt = new Date().toISOString();
+        credential.history = [
+          {
+            id: uuidv4(),
+            type: 'share',
+            timestamp: credential.lastSharedAt,
+            context,
+          },
+          ...(credential.history ?? []),
+        ].slice(0, 50);
+      });
+      await get()._persistVault();
+    },
     updateActivity: () => {
-      set({ lastActivity: Date.now() });
+      const now = Date.now();
+      const { lastActivity } = get();
+      if (now - lastActivity < 500) {
+        return;
+      }
+      set({ lastActivity: now });
     },
     _persistVault: async () => {
       const { vault, masterPassword } = get();
@@ -152,3 +198,8 @@ export const useVaultStore = create<VaultState & VaultActions>()(
     },
   }))
 );
+
+// Exponer el store en el objeto window para que la API de Electron pueda acceder a él
+if (typeof window !== 'undefined') {
+  (window as any).__vaultStore = useVaultStore;
+}
