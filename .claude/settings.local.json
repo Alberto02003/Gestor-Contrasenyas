@@ -30,7 +30,11 @@
       "Bash(node --version:*)",
       "Bash(reg query \"HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.gestor.contrasenyas\")",
       "Bash(\"/c/Users/amartin/.gestor-contrasenyas/com.gestor.contrasenyas.json\")",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(if [ -d \"build\" ])",
+      "Bash(then ls -la build/)",
+      "Bash(else echo \"Build folder does not exist\")",
+      "Bash(fi)"
     ],
     "deny": [],
     "ask": []
