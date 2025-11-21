@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generador de Iconos - Gestor de Contraseñas</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #09090b;
+            color: #fafafa;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+
+        .instructions {
+            background: #18181b;
+            border: 1px solid #27272a;
+            border-radius: 12px;
+            padding: 20px;
+            max-width: 600px;
+            margin-bottom: 30px;
+        }
+
+        .instructions h2 {
+            font-size: 18px;
+            margin-bottom: 12px;
+            color: #a1a1aa;
+        }
+
+        .instructions ol {
+            margin-left: 20px;
+            line-height: 1.8;
+        }
+
+        .previews {
+            display: flex;
+            gap: 30px;
+            margin-top: 30px;
+            flex-wrap: wrap;
+        }
+
+        .preview {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+
+        canvas {
+            border: 2px solid #27272a;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        canvas:hover {
+            transform: scale(1.05);
+            border-color: #3f3f46;
+        }
+
+        .size-label {
+            font-size: 14px;
+            color: #a1a1aa;
+        }
+
+        .download-btn {
+            background: #fafafa;
+            color: #09090b;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .download-btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .download-all {
+            margin-top: 30px;
+            padding: 12px 24px;
+            font-size: 16px;
+        }
+
+        .note {
+            margin-top: 20px;
+            padding: 16px;
+            background: #422006;
+            border: 1px solid #713f12;
+            border-radius: 8px;
+            max-width: 600px;
+            text-align: center;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔐 Generador de Iconos</h1>
+
+    <div class="instructions">
+        <h2>Instrucciones:</h2>
+        <ol>
+            <li>Los iconos se generan automáticamente al cargar la página</li>
+            <li>Haz clic en "Descargar" bajo cada icono para guardarlo</li>
+            <li>O usa "Descargar Todos" para obtener todos a la vez</li>
+            <li>Guarda los iconos en la carpeta <code>extension/assets/</code></li>
+            <li>Los iconos se generan con el tema de tu app (candado oscuro)</li>
+        </ol>
+    </div>
+
+    <div class="previews" id="previews"></div>
+
+    <button class="download-btn download-all" onclick="downloadAll()">
+        Descargar Todos los Iconos
+    </button>
+
+    <div class="note">
+        💡 Tip: Si quieres personalizar el diseño, edita la función <code>drawIcon()</code> en este archivo HTML
+    </div>
+
+    <script>
+        const sizes = [16, 32, 48, 128];
+        const icons = [];
+
+        function drawIcon(canvas, size) {
+            const ctx = canvas.getContext('2d');
+            const scale = size / 128;
+
+            // Fondo
+            ctx.fillStyle = '#09090b';
+            ctx.fillRect(0, 0, size, size);
+
+            // Candado - cuerpo
+            ctx.fillStyle = '#fafafa';
+            ctx.beginPath();
+            ctx.roundRect(
+                35 * scale,
+                55 * scale,
+                58 * scale,
+                48 * scale,
+                8 * scale
+            );
+            ctx.fill();
+
+            // Candado - arco superior
+            ctx.strokeStyle = '#fafafa';
+            ctx.lineWidth = 8 * scale;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.arc(
+                64 * scale,
+                55 * scale,
+                20 * scale,
+                Math.PI,
+                0,
+                true
+            );
+            ctx.stroke();
+
+            // Punto de bloqueo
+            ctx.fillStyle = '#09090b';
+            ctx.beginPath();
+            ctx.arc(64 * scale, 75 * scale, 6 * scale, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Línea vertical del punto
+            ctx.fillRect(
+                61 * scale,
+                75 * scale,
+                6 * scale,
+                15 * scale
+            );
+        }
+
+        function createIcon(size) {
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            drawIcon(canvas, size);
+
+            const preview = document.createElement('div');
+            preview.className = 'preview';
+
+            const sizeLabel = document.createElement('div');
+            sizeLabel.className = 'size-label';
+            sizeLabel.textContent = `${size}x${size}px`;
+
+            const downloadBtn = document.createElement('button');
+            downloadBtn.className = 'download-btn';
+            downloadBtn.textContent = 'Descargar';
+            downloadBtn.onclick = () => downloadIcon(canvas, size);
+
+            preview.appendChild(canvas);
+            preview.appendChild(sizeLabel);
+            preview.appendChild(downloadBtn);
+
+            document.getElementById('previews').appendChild(preview);
+
+            return canvas;
+        }
+
+        function downloadIcon(canvas, size) {
+            canvas.toBlob((blob) => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `icon${size}.png`;
+                a.click();
+                URL.revokeObjectURL(url);
+            });
+        }
+
+        async function downloadAll() {
+            for (let i = 0; i < icons.length; i++) {
+                await new Promise(resolve => {
+                    icons[i].canvas.toBlob((blob) => {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `icon${icons[i].size}.png`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        setTimeout(resolve, 200);
+                    });
+                });
+            }
+        }
+
+        // Generar todos los iconos al cargar
+        sizes.forEach(size => {
+            const canvas = createIcon(size);
+            icons.push({ canvas, size });
+        });
+    </script>
+</body>
+</html>

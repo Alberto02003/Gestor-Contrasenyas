@@ -2,8 +2,25 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { v4 as uuidv4 } from 'uuid';
 import { Credential, Vault, Settings, EncryptedVault, VaultSchema, EncryptedVaultSchema } from '@/types/vault';
-import { encrypt, decrypt } from '@/lib/crypto';
+import { encrypt, decrypt, validateMasterPassword } from '@/lib/crypto';
+
 const VAULT_STORAGE_KEY = 'cipherkeep-vault';
+
+// Función auxiliar para notificar cambios a Electron (para extensión de navegador)
+const notifyElectronVaultChange = (state: VaultState) => {
+  // Verificar si estamos en Electron
+  if (typeof window !== 'undefined' && (window as any).electronAPI?.send) {
+    try {
+      (window as any).electronAPI.send('vault-state-changed', {
+        isUnlocked: state.status === 'unlocked',
+        credentials: state.vault?.credentials || []
+      });
+      console.log('[Extension] Estado sincronizado con Electron');
+    } catch (error) {
+      console.error('[Extension] Error sincronizando estado:', error);
+    }
+  }
+};
 type VaultStatus = 'onboarding' | 'locked' | 'unlocked' | 'loading';
 type VaultState = {
   status: VaultStatus;
@@ -53,6 +70,11 @@ export const useVaultStore = create<VaultState & VaultActions>()(
     createVault: async (masterPassword) => {
       set({ status: 'loading', error: null });
       try {
+        const passwordErrors = validateMasterPassword(masterPassword);
+        if (passwordErrors.length > 0) {
+          set({ status: 'onboarding', error: `Contraseña maestra insegura: ${passwordErrors.join(' · ')}` });
+          return;
+        }
         const newVault: Vault = {
           credentials: [],
           settings: {
@@ -64,6 +86,9 @@ export const useVaultStore = create<VaultState & VaultActions>()(
         const encrypted = await encrypt(JSON.stringify(newVault), masterPassword);
         localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(encrypted));
         set({ status: 'unlocked', vault: newVault, masterPassword });
+
+        // Notificar a extensión
+        notifyElectronVaultChange(get());
       } catch (error) {
         console.error('Vault creation failed:', error);
         set({ status: 'onboarding', error: 'Failed to create vault.' });
@@ -78,6 +103,9 @@ export const useVaultStore = create<VaultState & VaultActions>()(
         const decrypted = await decrypt(encryptedVault, masterPassword);
         const vault = VaultSchema.parse(JSON.parse(decrypted));
         set({ status: 'unlocked', vault, masterPassword, lastActivity: Date.now() });
+
+        // Notificar a extensión
+        notifyElectronVaultChange(get());
       } catch (error) {
         console.error('Unlock failed:', error);
         set({ status: 'locked', error: 'Invalid password or corrupted vault.' });
@@ -85,6 +113,9 @@ export const useVaultStore = create<VaultState & VaultActions>()(
     },
     lockVault: () => {
       set({ status: 'locked', vault: null, masterPassword: null, error: null });
+
+      // Notificar a extensión
+      notifyElectronVaultChange(get());
     },
     addCredential: async (credentialData) => {
       const { vault } = get();
@@ -100,6 +131,9 @@ export const useVaultStore = create<VaultState & VaultActions>()(
         state.vault?.credentials.push(newCredential);
       });
       await get()._persistVault();
+
+      // Notificar a extensión
+      notifyElectronVaultChange(get());
     },
     updateCredential: async (updatedCredential) => {
       const { vault } = get();
@@ -115,6 +149,9 @@ export const useVaultStore = create<VaultState & VaultActions>()(
         }
       });
       await get()._persistVault();
+
+      // Notificar a extensión
+      notifyElectronVaultChange(get());
     },
     deleteCredential: async (id) => {
       const { vault } = get();
@@ -124,6 +161,9 @@ export const useVaultStore = create<VaultState & VaultActions>()(
         state.vault.credentials = state.vault.credentials.filter(c => c.id !== id);
       });
       await get()._persistVault();
+
+      // Notificar a extensión
+      notifyElectronVaultChange(get());
     },
     updateSettings: async (newSettings) => {
       const { vault } = get();

@@ -1,0 +1,9 @@
+{
+  "name": "com.gestor.contrasenyas",
+  "description": "Native messaging host para Gestor de Contraseñas",
+  "path": "C:\\Users\\amartin\\Documents\\Gestor-Contrasenyas\\extension\\native-host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://mblfagdofdndgkgkldgcdjapgaoobfif/"
+  ]
+}

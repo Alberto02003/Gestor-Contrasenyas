@@ -1,24 +1,55 @@
 import { EncryptedVault } from '@/types/vault';
+
 const ALGO = 'AES-GCM';
 const KEY_ALGO = 'PBKDF2';
 const HASH = 'SHA-256';
-const ITERATIONS = 250000;
+export const PBKDF2_ITERATIONS = 600_000; // 2024 OWASP baseline
 const KEY_LENGTH = 256;
-// Helper to convert ArrayBuffer to Base64 string
+
 const bufferToBase64 = (buffer: ArrayBuffer): string => {
-  return btoa(String.fromCharCode(...new Uint8Array(buffer)));
-};
-// Helper to convert Base64 string to ArrayBuffer
-const base64ToBuffer = (base64: string): ArrayBuffer => {
-  const binaryString = atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+  const view = new Uint8Array(buffer);
+  if (typeof btoa === 'function') {
+    return btoa(String.fromCharCode(...view));
   }
-  return bytes.buffer;
+  const nodeBuffer = typeof globalThis !== 'undefined' ? (globalThis as any).Buffer : undefined;
+  if (nodeBuffer) {
+    return nodeBuffer.from(view).toString('base64');
+  }
+  throw new Error('No base64 encoder available in this environment.');
 };
-// Derives a key from a master password using PBKDF2
+
+const base64ToBuffer = (base64: string): ArrayBuffer => {
+  if (typeof atob === 'function') {
+    const binaryString = atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+  const nodeBuffer = typeof globalThis !== 'undefined' ? (globalThis as any).Buffer : undefined;
+  if (nodeBuffer) {
+    return Uint8Array.from(nodeBuffer.from(base64, 'base64')).buffer;
+  }
+  throw new Error('No base64 decoder available in this environment.');
+};
+
+/**
+ * Enforces minimum entropy for the master password to prevent weak vault keys.
+ * Returns an array of unmet requirements (empty when valid).
+ */
+export const validateMasterPassword = (password: string): string[] => {
+  const errors: string[] = [];
+  if (password.length < 12) errors.push('Debe tener al menos 12 caracteres');
+  if (!/[a-z]/.test(password)) errors.push('Debe incluir minúsculas');
+  if (!/[A-Z]/.test(password)) errors.push('Debe incluir mayúsculas');
+  if (!/[0-9]/.test(password)) errors.push('Debe incluir números');
+  if (!/[^A-Za-z0-9]/.test(password)) errors.push('Debe incluir un símbolo');
+  return errors;
+};
+
+/** Derives a symmetric key from the master password using PBKDF2 + SHA-256. */
 export const deriveKey = async (password: string, salt: Uint8Array): Promise<CryptoKey> => {
   const masterKey = await crypto.subtle.importKey(
     'raw',
@@ -31,7 +62,7 @@ export const deriveKey = async (password: string, salt: Uint8Array): Promise<Cry
     {
       name: KEY_ALGO,
       salt: salt,
-      iterations: ITERATIONS,
+      iterations: PBKDF2_ITERATIONS,
       hash: HASH,
     },
     masterKey,
@@ -40,7 +71,11 @@ export const deriveKey = async (password: string, salt: Uint8Array): Promise<Cry
     ['encrypt', 'decrypt']
   );
 };
-// Encrypts data with a derived key
+
+/**
+ * Encrypts arbitrary JSON-serializable data using a fresh salt and IV.
+ * Output includes salt/iv so decryption can derive the same key.
+ */
 export const encrypt = async (data: string, password: string): Promise<EncryptedVault> => {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -59,7 +94,8 @@ export const encrypt = async (data: string, password: string): Promise<Encrypted
     encryptedData: bufferToBase64(encryptedData),
   };
 };
-// Decrypts data with a derived key
+
+/** Decrypts vault content with the provided master password. */
 export const decrypt = async (encryptedVault: EncryptedVault, password: string): Promise<string> => {
   try {
     const salt = new Uint8Array(base64ToBuffer(encryptedVault.salt));

@@ -6,6 +6,7 @@ const { randomUUID, createCipheriv, createDecipheriv, randomBytes, createHash } 
 const net = require('net');
 const http = require('http');
 const fs = require('fs');
+const nativeMessaging = require(path.join(__dirname, '../extension/electron-native-messaging.cjs'));
 
 let mainWindow = null;
 let tray = null;
@@ -25,7 +26,17 @@ const PRESENCE_INTERVAL_MS = 3000; // Anunciar cada 3 segundos
 const PEER_TTL_MS = 10000; // TTL de 10 segundos
 const NETWORK_SCAN_INTERVAL_MS = 2000; // Escanear cada 2 segundos para detección en tiempo real
 const PING_TIMEOUT_MS = 500; // Timeout rápido de 500ms para respuesta inmediata
-const NETWORK_SECRET = process.env.NETWORK_SECRET || 'gestor-network-share-secret';
+// Lazy loading de NETWORK_SECRET - solo se valida cuando se usa network
+let _networkSecret = null;
+function getNetworkSecret() {
+  if (_networkSecret) return _networkSecret;
+  const secret = process.env.NETWORK_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error('[network] NETWORK_SECRET debe estar definido (32+ caracteres) antes de habilitar compartir por red.');
+  }
+  _networkSecret = secret;
+  return _networkSecret;
+}
 const SHARE_ALGORITHM = 'aes-256-gcm';
 const peerMap = new Map();
 const selfId = randomUUID();
@@ -75,6 +86,9 @@ function createWindow() {
     emitPeerUpdate();
     toggleWindow(true);
   });
+
+  // Configurar sincronización de vault con extensión
+  nativeMessaging.setupVaultSync(mainWindow);
 
   mainWindow.on('blur', () => {
     if (mainWindow && mainWindow.isVisible() && !mainWindow.webContents.isDevToolsOpened()) {
@@ -259,7 +273,7 @@ function getLocalIPv4() {
 
 function deriveSharedKey(peerIdA, peerIdB) {
   const sharedSeed = [peerIdA, peerIdB].sort().join(':');
-  return createHash('sha256').update(`${NETWORK_SECRET}:${sharedSeed}`).digest();
+  return createHash('sha256').update(`${getNetworkSecret()}:${sharedSeed}`).digest();
 }
 
 function encryptSharePayload(targetPeerId, payload) {
@@ -731,9 +745,19 @@ nativeTheme.on('updated', () => {
 });
 
 app.whenReady().then(() => {
-  createWindow();
-  createTray();
-  startNetworkBridge();
+  // Verificar si se ejecuta en modo native messaging para extensión
+  if (process.argv.includes('--native-messaging')) {
+    console.log('[NativeMessaging] Modo activado - iniciando comunicación con extensión');
+    createWindow();
+    nativeMessaging.setupNativeMessaging(mainWindow);
+    // NO iniciamos tray ni network en modo native messaging
+  } else {
+    // Modo normal de la app
+    createWindow();
+    createTray();
+    startNetworkBridge();
+    startAPIServer();
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -781,8 +805,98 @@ function startAPIServer() {
       return;
     }
 
-    // GET /api/credentials - Obtener todas las credenciales
-    if (req.url === '/api/credentials' && req.method === 'GET') {
+    // Parsear URL para manejar query params
+    const parsedUrl = new URL(req.url, `http://localhost:${API_PORT}`);
+    const pathname = parsedUrl.pathname;
+    const searchParams = parsedUrl.searchParams;
+
+    // GET /status - Estado de la vault (para extensión)
+    if (pathname === '/status' && req.method === 'GET') {
+      try {
+        let isUnlocked = false;
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          try {
+            isUnlocked = await mainWindow.webContents.executeJavaScript(`
+              (function() {
+                const storeData = window.__vaultStore?.getState?.();
+                return storeData?.status === 'unlocked';
+              })()
+            `);
+          } catch (e) {
+            console.warn('[API] Error checking vault status');
+          }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ isUnlocked }));
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ isUnlocked: false, error: error.message }));
+      }
+      return;
+    }
+
+    // GET /credentials - Obtener credenciales (para extensión)
+    if (pathname === '/credentials' && req.method === 'GET') {
+      try {
+        let credentials = [];
+        const urlFilter = searchParams.get('url') || '';
+        const searchQuery = searchParams.get('search') || '';
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          try {
+            const result = await mainWindow.webContents.executeJavaScript(`
+              (function() {
+                const storeData = window.__vaultStore?.getState?.();
+                if (storeData?.status === 'unlocked' && storeData?.vault) {
+                  return storeData.vault.credentials || [];
+                }
+                return [];
+              })()
+            `);
+
+            if (result && Array.isArray(result)) {
+              credentials = result.map(c => ({
+                id: c.id,
+                title: c.title,
+                username: c.username,
+                password: c.password,
+                url: c.url
+              }));
+
+              // Filtrar por URL si se proporciona
+              if (urlFilter) {
+                credentials = credentials.filter(c =>
+                  c.url && (c.url.includes(urlFilter) || urlFilter.includes(c.url))
+                );
+              }
+
+              // Filtrar por búsqueda si se proporciona
+              if (searchQuery) {
+                const query = searchQuery.toLowerCase();
+                credentials = credentials.filter(c =>
+                  c.title?.toLowerCase().includes(query) ||
+                  c.username?.toLowerCase().includes(query)
+                );
+              }
+            }
+          } catch (e) {
+            console.warn('[API] Error getting credentials');
+          }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ credentials }));
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ credentials: [], error: error.message }));
+      }
+      return;
+    }
+
+    // GET /api/credentials - Obtener todas las credenciales (legacy)
+    if (pathname === '/api/credentials' && req.method === 'GET') {
       try {
         let credentials = [];
 
@@ -882,11 +996,7 @@ function stopAPIServer() {
   }
 }
 
-// Iniciar API server cuando la app esté lista
-app.whenReady().then(() => {
-  startAPIServer();
-});
-
+// API Server se inicia con whenReady arriba
 
 
 

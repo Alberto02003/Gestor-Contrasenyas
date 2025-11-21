@@ -23,3 +23,24 @@ contextBridge.exposeInMainWorld('netShare', {
     return () => ipcRenderer.removeListener('network:password-received', handler);
   },
 });
+
+// API para comunicación con extensión de navegador
+contextBridge.exposeInMainWorld('electronAPI', {
+  send: (channel, data) => {
+    // Canales permitidos para enviar
+    const validChannels = ['vault-state-changed'];
+    if (validChannels.includes(channel)) {
+      ipcRenderer.send(channel, data);
+    }
+  },
+  on: (channel, callback) => {
+    // Canales permitidos para escuchar
+    const validChannels = ['extension-unlock-request'];
+    if (validChannels.includes(channel)) {
+      ipcRenderer.on(channel, (event, ...args) => callback(...args));
+    }
+  },
+  removeListener: (channel, callback) => {
+    ipcRenderer.removeListener(channel, callback);
+  }
+});
